@@ -106,7 +106,7 @@ def unpack_message(message):
     ciphertext = message[23:-32]
     
     # Build header for HMAC verification (everything before ciphertext)
-    header = message[0:23]
+    header = message[0:7]
     
     return {
         'opcode': opcode,

@@ -44,14 +44,17 @@ class SecureServer:
         
         # Encrypt challenge
         enc_key, mac_key = session.get_send_keys()
+        
+        # Build header WITHOUT IV
         header_data = struct.pack('!B B I B', 
                                   Opcode.SERVER_CHALLENGE,
                                   session.client_id,
                                   session.round_number,
                                   Direction.SERVER_TO_CLIENT)
         
+        # Encrypt and authenticate (IV generated inside)
         iv, ciphertext, hmac_tag = encrypt_and_authenticate(
-            challenge_nonce, enc_key, mac_key, header_data + generate_iv()
+            challenge_nonce, enc_key, mac_key, header_data
         )
         
         # Pack and return message
@@ -127,25 +130,22 @@ class SecureServer:
         """
         Send SERVER_AGGR_RESPONSE with aggregated result.
         """
-        # Increment round for response
-        advance_round(session)
-        
         # Pack aggregated value
         payload = struct.pack('!I', aggregated_value)
         
         # Encrypt payload
         enc_key, mac_key = session.get_send_keys()
+        
+        # Build header WITHOUT IV
         header_data = struct.pack('!B B I B',
                                   Opcode.SERVER_AGGR_RESPONSE,
                                   session.client_id,
                                   session.round_number,
                                   Direction.SERVER_TO_CLIENT)
         
-        iv = generate_iv()
-        iv_with_header = header_data + iv
-        
+        # Encrypt and authenticate (IV generated inside)
         iv, ciphertext, hmac_tag = encrypt_and_authenticate(
-            payload, enc_key, mac_key, iv_with_header
+            payload, enc_key, mac_key, header_data
         )
         
         # Pack message
@@ -159,7 +159,7 @@ class SecureServer:
             hmac_tag
         )
         
-        # Evolve keys
+        # Evolve keys after sending
         session.evolve_send_keys(ciphertext, struct.pack('!I', aggregated_value))
         
         # Send response

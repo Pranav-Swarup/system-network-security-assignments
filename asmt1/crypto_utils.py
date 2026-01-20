@@ -133,15 +133,16 @@ def generate_iv():
 
 
 # Full encryption procedure
-def encrypt_and_authenticate(plaintext, enc_key, mac_key, header):
+def encrypt_and_authenticate(plaintext, enc_key, mac_key, header_without_iv):
     """
     Complete encryption procedure:
     1. Pad plaintext
     2. Generate IV
     3. Encrypt with AES-CBC
-    4. Compute HMAC over header + ciphertext
+    4. Compute HMAC over (header + IV + ciphertext)
     
     Returns (iv, ciphertext, hmac_tag)
+    Note: header_without_iv should NOT include the IV
     """
     # Step 1: Apply padding
     padded = pkcs7_pad(plaintext)
@@ -152,15 +153,14 @@ def encrypt_and_authenticate(plaintext, enc_key, mac_key, header):
     # Step 3: Encrypt
     ciphertext = aes_encrypt(padded, enc_key, iv)
     
-    # Step 4: Compute HMAC over header || ciphertext
-    # Note: IV is part of header
-    data_to_mac = header + ciphertext
+    # Step 4: Compute HMAC over header || IV || ciphertext
+    data_to_mac = header_without_iv + iv + ciphertext
     hmac_tag = compute_hmac(mac_key, data_to_mac)
     
     return iv, ciphertext, hmac_tag
 
 
-def verify_and_decrypt(ciphertext, enc_key, mac_key, header, received_hmac, iv):
+def verify_and_decrypt(ciphertext, enc_key, mac_key, header_without_iv, received_hmac, iv):
     """
     Complete decryption procedure:
     1. Verify HMAC BEFORE decryption
@@ -169,9 +169,10 @@ def verify_and_decrypt(ciphertext, enc_key, mac_key, header, received_hmac, iv):
     4. Return plaintext or None on failure
     
     Returns plaintext or None
+    Note: header_without_iv should NOT include the IV
     """
-    # Step 1: Verify HMAC first
-    data_to_mac = header + ciphertext
+    # Step 1: Verify HMAC first (over header + IV + ciphertext)
+    data_to_mac = header_without_iv + iv + ciphertext
     if not verify_hmac(mac_key, data_to_mac, received_hmac):
         return None
     
