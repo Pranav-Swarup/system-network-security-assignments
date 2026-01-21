@@ -5,16 +5,16 @@ from cryptography.hazmat.backends import default_backend
 import hmac
 
 
-# PKCS#7 padding implementation
+
 def pkcs7_pad(data):
     """
-    Add PKCS#7 padding to data.
+    Add PKCS
     Padding is always added, even if data is already block-aligned.
     """
     block_size = 16
     padding_length = block_size - (len(data) % block_size)
     
-    # Create padding bytes - all bytes equal to padding length
+    
     padding = bytes([padding_length] * padding_length)
     
     return data + padding
@@ -22,33 +22,33 @@ def pkcs7_pad(data):
 
 def pkcs7_unpad(padded_data):
     """
-    Remove PKCS#7 padding from data.
+    Remove PKCS
     Returns None if padding is invalid (treated as tampering).
     """
     if len(padded_data) == 0:
         return None
     
-    # Last byte tells us padding length
+    
     padding_length = padded_data[-1]
     
-    # Validate padding length
+    
     if padding_length < 1 or padding_length > 16:
         return None
     
     if len(padded_data) < padding_length:
         return None
     
-    # Check all padding bytes match
+    
     padding_bytes = padded_data[-padding_length:]
     for byte in padding_bytes:
         if byte != padding_length:
             return None
     
-    # Remove padding
+    
     return padded_data[:-padding_length]
 
 
-# AES-128-CBC encryption/decryption
+
 def aes_encrypt(plaintext, key, iv):
     """
     Encrypt plaintext using AES-128-CBC.
@@ -81,7 +81,7 @@ def aes_decrypt(ciphertext, key, iv):
     return plaintext
 
 
-# HMAC operations
+
 def compute_hmac(key, data):
     """
     Compute HMAC-SHA256 over data.
@@ -100,7 +100,7 @@ def verify_hmac(key, data, received_hmac):
     return hmac.compare_digest(expected_hmac, received_hmac)
 
 
-# Key derivation functions
+
 def derive_key(master_key, label):
     """
     Derive a key from master key using label.
@@ -109,7 +109,7 @@ def derive_key(master_key, label):
     h = hashlib.sha256()
     h.update(master_key)
     h.update(label.encode('utf-8'))
-    return h.digest()[:16]  # AES-128 needs 16 bytes
+    return h.digest()[:16]  
 
 
 def evolve_key(current_key, context):
@@ -120,10 +120,10 @@ def evolve_key(current_key, context):
     h = hashlib.sha256()
     h.update(current_key)
     h.update(context)
-    return h.digest()[:16]  # AES-128 needs 16 bytes
+    return h.digest()[:16]  
 
 
-# Random IV generation
+
 def generate_iv():
     """
     Generate cryptographically secure random IV.
@@ -132,7 +132,7 @@ def generate_iv():
     return os.urandom(16)
 
 
-# Full encryption procedure
+
 def encrypt_and_authenticate(plaintext, enc_key, mac_key, header_without_iv):
     """
     Complete encryption procedure:
@@ -144,16 +144,16 @@ def encrypt_and_authenticate(plaintext, enc_key, mac_key, header_without_iv):
     Returns (iv, ciphertext, hmac_tag)
     Note: header_without_iv should NOT include the IV
     """
-    # Step 1: Apply padding
+    
     padded = pkcs7_pad(plaintext)
     
-    # Step 2: Generate fresh IV
+    
     iv = generate_iv()
     
-    # Step 3: Encrypt
+    
     ciphertext = aes_encrypt(padded, enc_key, iv)
     
-    # Step 4: Compute HMAC over header || IV || ciphertext
+    
     data_to_mac = header_without_iv + iv + ciphertext
     hmac_tag = compute_hmac(mac_key, data_to_mac)
     
@@ -171,15 +171,15 @@ def verify_and_decrypt(ciphertext, enc_key, mac_key, header_without_iv, received
     Returns plaintext or None
     Note: header_without_iv should NOT include the IV
     """
-    # Step 1: Verify HMAC first (over header + IV + ciphertext)
+    
     data_to_mac = header_without_iv + iv + ciphertext
     if not verify_hmac(mac_key, data_to_mac, received_hmac):
         return None
     
-    # Step 2: Decrypt
+    
     padded_plaintext = aes_decrypt(ciphertext, enc_key, iv)
     
-    # Step 3: Remove padding
+    
     plaintext = pkcs7_unpad(padded_plaintext)
     
     return plaintext
