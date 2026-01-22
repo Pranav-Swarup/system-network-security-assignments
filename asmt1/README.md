@@ -54,6 +54,8 @@ The server will:
 
 ### Running a Client
 
+Note: ``-i`` flag can be passed at the end in place of value for an interactive session. 
+
 ```bash
 python client.py <client_id> <master_key_hex> [data_value]
 ```
