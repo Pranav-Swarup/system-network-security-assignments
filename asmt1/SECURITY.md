@@ -1,340 +1,290 @@
-# Security Analysis
+# Security Analysis – In Plain English
 
-## Protocol Security Properties
+This protocol is designed to operate safely in a hostile network, where an attacker can read, modify, replay, delay, or inject packets. The goal is simple: even in that environment, messages should remain private, authentic, ordered, and resistant to manipulation.
 
-This document analyzes how the implemented protocol achieves security against various attack scenarios in a hostile network environment.
+What follows explains *how* each security property is achieved and *why* it works.
+
+---
 
 ## 1. Confidentiality
 
-**Mechanism:** AES-128-CBC encryption with fresh random IVs
+**How messages stay secret:**  
+Every message is encrypted using AES-128 in CBC mode with a fresh, random IV.
 
-**How it works:**
-- Every message uses a unique 16-byte random IV
-- AES-128 provides strong encryption (128-bit security level)
-- CBC mode ensures blocks are chained together
-- Different IVs ensure identical plaintexts encrypt differently
+- Each message gets its own 16-byte random IV.
+- Even if two plaintext messages are identical, their ciphertext will differ.
+- The IV is sent in the clear, but that does not weaken security.
 
-**Protection against:**
-- Eavesdropping: Adversary sees only ciphertext
-- Pattern analysis: Same plaintext produces different ciphertexts
-- Known-plaintext attacks: IV randomization prevents this
+**What this stops:**
 
-**Why it's secure:**
-- IV is transmitted in cleartext but doesn't compromise security
-- AES-128 has no known practical attacks
-- Fresh IV per message prevents deterministic encryption
+- Eavesdroppers only see random-looking bytes.
+- Pattern matching (e.g., “this looks like the same message again”) fails.
+- Known-plaintext attacks are ineffective because encryption is never deterministic.
+
+**Why this is safe:**  
+AES-128 is considered secure, and using a fresh IV per message prevents any useful structure from leaking.
+
+---
 
 ## 2. Integrity and Authentication
 
-**Mechanism:** HMAC-SHA256 over entire message
+**How tampering is detected:**  
+Each message carries an HMAC-SHA256 over:
 
-**How it works:**
-- HMAC computed over: `Header || IV || Ciphertext`
-- 256-bit output provides strong authentication
-- MAC key separate from encryption key
-- Constant-time comparison prevents timing attacks
+    Header || IV || Ciphertext
 
-**Protection against:**
-- Message tampering: Any bit change invalidates HMAC
-- Forgery: Cannot create valid HMAC without MAC key
-- Substitution: HMAC binds ciphertext to header fields
+- The MAC key is different from the encryption key.
+- The HMAC is verified in constant time.
 
-**Why it's secure:**
-- HMAC-SHA256 has no known collision attacks
-- Separate MAC key prevents related-key attacks
-- Covers all fields including round number and direction
+**What this stops:**
 
-## 3. Replay Attack Prevention
+- Bit-flipping attacks
+- Message forgery
+- Field substitution (round numbers, direction, opcodes, etc.)
 
-**Mechanism:** Strict round number enforcement
+**Why this is safe:**  
+Without the MAC key, producing a valid HMAC is computationally infeasible. Any change to the message is immediately detected.
 
-**How it works:**
-- Each message includes monotonically increasing round number
-- Server/client maintain expected round in state
-- Message accepted only if round matches expected value
-- Round incremented only after successful exchange
+---
 
-**Protection against:**
-- Replay attacks: Old messages have wrong round number
-- Out-of-order delivery: Only current round accepted
-- Message injection: Future rounds rejected
+## 3. Replay Protection
 
-**Why it's secure:**
-- Round number is HMAC-protected (cannot be modified)
-- State-based validation prevents acceptance
-- No "grace period" for old messages
+**How replays are blocked:**  
+Every message contains a monotonically increasing round number.
 
-**Attack scenario:**
-```
-Adversary captures valid message at Round 5
-Later replays it when protocol is at Round 8
-Server checks: expected Round 8, received Round 5
-Result: Message rejected, session terminated
-```
+- Both sides track the *exact* round they expect.
+- A message is accepted only if its round matches that expectation.
+- The round number is covered by the HMAC, so it can’t be altered.
 
-## 4. Message Reordering Prevention
+**What this stops:**
 
-**Mechanism:** Strict sequencing via round numbers and FSM
+- Replaying old messages
+- Injecting “future” messages
+- Out-of-order delivery
 
-**How it works:**
-- Messages must arrive in exact round order
-- FSM validates opcode for current state
-- No buffering of out-of-order messages
+**Example:**
 
-**Protection against:**
-- Reordering: Only sequential rounds accepted
-- Protocol confusion: FSM enforces valid transitions
+    Attacker replays a valid Round 5 message  
+    Protocol is now at Round 8  
+    Server expects Round 8, receives Round 5  
+    → Rejected immediately
 
-**Why it's secure:**
-- Combined round + FSM validation
-- Single expected message at any time
-- No ambiguity in protocol state
+---
 
-**Attack scenario:**
-```
-Adversary intercepts Round 2 and Round 3 messages
-Delivers Round 3 before Round 2
-Server at Round 2: expects Round 2, receives Round 3
-Result: Rejected immediately
-```
+## 4. Reordering Protection
 
-## 5. Reflection Attack Prevention
+**How order is enforced:**
 
-**Mechanism:** Direction field validation
+- Only one specific round is valid at any time.
+- The FSM ensures only the correct opcode is allowed in that round.
+- There is no buffering or reassembly of out-of-order messages.
 
-**How it works:**
-- Each message includes direction byte
-- Server expects CLIENT_TO_SERVER (0x01)
-- Client expects SERVER_TO_CLIENT (0x02)
-- Direction is HMAC-protected
+**What this stops:**
 
-**Protection against:**
-- Message reflection: Wrong direction detected
-- Self-messaging: Cannot send own messages back
+- Message reordering
+- Protocol confusion
+- State-skipping attacks
 
-**Why it's secure:**
-- Direction included in HMAC computation
-- Cannot modify without breaking HMAC
-- Symmetric but directional keys add extra layer
+If Round 3 arrives before Round 2, it is rejected on sight.
 
-**Attack scenario:**
-```
-Adversary captures server response
-Sends it back to server
-Server checks: expects direction 0x01, receives 0x02
-Result: Rejected as invalid direction
-```
+---
+
+## 5. Reflection Protection
+
+**How self-reflection is prevented:**
+
+- Each message includes a direction byte:
+  - Client → Server: `0x01`
+  - Server → Client: `0x02`
+- The direction is included in the HMAC.
+
+**What this stops:**
+
+- Sending server messages back to the server
+- Looping messages between endpoints
+- Confusing one side into processing its own output
+
+Since the direction is authenticated, an attacker cannot flip it.
+
+---
 
 ## 6. Key Evolution (Forward Secrecy)
 
-**Mechanism:** Ratcheting keys after each successful round
+**How damage is limited:**  
+After each successful round, keys are *ratcheted* forward:
 
-**How it works:**
-- Keys derived using: `New_Key = H(Old_Key || Context)`
-- Context includes ciphertext or nonce from current round
-- Evolution happens only after successful verification
-- Separate evolution for each direction
+    NewKey = H(OldKey || Context)
 
-**Protection against:**
-- Key compromise: Old messages cannot be decrypted
-- Future compromise: Past keys cannot be recovered
-- Long-term key exposure: Limits damage scope
+The context includes data from the current round (e.g., ciphertext).
 
-**Why it's secure:**
-- One-way hash function prevents key recovery
-- Context binding prevents state manipulation
-- Failure prevents evolution (no desync on attack)
+- Keys only evolve after successful verification.
+- Each direction evolves independently.
+- Hashing is one-way.
 
-**Key evolution example:**
-```
-Round 0: C2S_Enc_0 = H(Master_Key || "C2S-ENC")
-Round 1: C2S_Enc_1 = H(C2S_Enc_0 || Ciphertext_0)
-Round 2: C2S_Enc_2 = H(C2S_Enc_1 || Ciphertext_1)
-...
+**What this stops:**
 
-If Round 2 key is compromised:
-- Cannot decrypt Round 0 or Round 1 messages (forward secrecy)
-- Cannot derive Round 3+ keys without seeing Round 2 ciphertext
-```
+- Decrypting past messages after a compromise
+- Reconstructing old keys
+- Long-term exposure from a single leak
 
-## 7. Padding Oracle Prevention
+If an attacker learns the Round 2 key, they still cannot:
 
-**Mechanism:** Authenticate-then-Encrypt with HMAC verification first
+- Decrypt Rounds 0 or 1
+- Derive Round 3 without seeing Round 2 traffic
 
-**How it works:**
-- HMAC verified BEFORE any decryption
-- Padding validation happens after HMAC check
-- Same error response for all HMAC failures
-- Session terminated on any validation failure
+---
 
-**Protection against:**
-- Padding oracle: HMAC fails before padding checked
-- Timing attacks: Constant-time HMAC comparison
-- Error message analysis: Uniform error handling
+## 7. Padding Oracle Defense
 
-**Why it's secure:**
-- No information leakage from padding errors
-- Decryption never attempted with invalid HMAC
-- Single code path for all authentication failures
+**How padding leaks are avoided:**
 
-**Attack scenario:**
-```
-Adversary sends message with invalid padding
-Server checks HMAC first: HMAC invalid
-Server never reaches padding validation
-Adversary learns nothing about padding
-Session terminated immediately
-```
+- HMAC is verified *before* any decryption.
+- Padding is never checked unless the HMAC is valid.
+- All failures produce the same behavior: terminate the session.
 
-## 8. State Desynchronization Handling
+**What this stops:**
 
-**Mechanism:** Permanent session termination on any failure
+- Padding oracle attacks
+- Error-based side channels
+- Timing-based feedback loops
 
-**How it works:**
-- Any validation failure terminates session
-- No recovery or resynchronization attempts
-- Keys not evolved on failure
-- Clear separation between success/failure paths
+An attacker never learns whether padding was “almost correct.”
 
-**Protection against:**
-- Desync attacks: Session ends rather than continuing
-- State confusion: No ambiguous states exist
-- Recovery exploits: No recovery mechanism to exploit
+---
 
-**Why it's secure:**
-- Conservative failure handling
-- No partial state updates
-- Clear security boundary (success or termination)
+## 8. Desynchronization Handling
 
-**Attack scenario:**
-```
-Adversary drops a message mid-protocol
-Client evolves keys, server does not
-Next message: client uses Round N+1, server expects Round N
-Result: Round mismatch detected, session terminated
-```
+**How confusion is avoided:**
 
-## 9. HMAC Tampering Protection
+- Any failure ends the session.
+- No recovery or resynchronization exists.
+- Keys are not evolved on failure.
 
-**Mechanism:** Cryptographic message authentication
+**What this stops:**
 
-**How it works:**
-- 256-bit HMAC provides collision resistance
-- MAC key shared only between client-server pair
-- Covers all message fields (header + ciphertext)
+- State manipulation
+- Partial desync exploits
+- Recovery-based attacks
 
-**Protection against:**
-- Bit flipping: Changes invalidate HMAC
-- Field modification: Round/opcode protected
-- Ciphertext substitution: Detected immediately
+If one side advances and the other does not, the next message fails and the session ends cleanly.
 
-**Why it's secure:**
-- HMAC-SHA256 computationally infeasible to forge
-- No known collision attacks
-- Key not derivable from MAC values
+---
+
+## 9. HMAC Tampering Resistance
+
+This is the cryptographic backbone:
+
+- 256-bit HMAC output
+- Covers *everything* in the message
+- Key never leaves the endpoints
+
+It prevents:
+
+- Bit-flips
+- Field edits
+- Ciphertext substitution
+
+Forgery is computationally infeasible.
+
+---
 
 ## 10. Multi-Client Isolation
 
-**Mechanism:** Per-client session state and keys
+Each client has:
 
-**How it works:**
-- Each client has unique master key
-- Separate session state per client
-- Client ID in message header (HMAC-protected)
-- Server maintains isolated session dictionary
+- Its own master key
+- Its own session state
+- Its own evolving keys
 
-**Protection against:**
-- Cross-client attacks: Different keys per client
-- Session hijacking: Client ID authenticated
-- Data mixing: Aggregation uses evolved keys
+The client ID is part of the authenticated header.
 
-**Why it's secure:**
-- No shared cryptographic material between clients
-- Session state cannot be transferred
-- Client ID cannot be forged (in HMAC)
+**This means:**
 
-## 11. Opcode Validation via FSM
+- One client cannot impersonate another.
+- Sessions cannot be mixed.
+- Compromise is contained to a single client.
 
-**Mechanism:** Finite State Machine with strict transitions
+---
 
-**How it works:**
-- Protocol states: INIT → ACTIVE → TERMINATED
-- Each state allows specific opcodes only
-- Opcode validated before processing
-- Invalid opcode terminates session
+## 11. FSM-Based Opcode Validation
 
-**Protection against:**
-- Protocol confusion: FSM enforces valid flow
-- State manipulation: Opcodes tied to states
-- Premature transitions: Cannot skip states
+The protocol follows a strict state machine:
 
-**Valid transitions:**
-```
-INIT state: Only CLIENT_HELLO allowed
-  → Send SERVER_CHALLENGE
-  → Transition to ACTIVE
+    INIT → ACTIVE → TERMINATED
 
-ACTIVE state: CLIENT_DATA or TERMINATE allowed
-  → Process data and aggregate
-  → Send SERVER_AGGR_RESPONSE
-  → Can continue or terminate
+Each state allows only specific opcodes.
 
-TERMINATED: No opcodes accepted, session ended
-```
+- Invalid opcode in any state = session termination
+- No skipping steps
+- No ambiguous transitions
+
+This prevents protocol confusion and state abuse.
+
+---
 
 ## 12. Malformed Message Rejection
 
-**Mechanism:** Strict message format validation
+The parser enforces:
 
-**How it works:**
-- Minimum message size enforced (55 bytes)
-- Fixed header size (7 bytes)
-- IV size exactly 16 bytes
-- HMAC size exactly 32 bytes
-- Parsing validates all size constraints
+- Minimum message size
+- Fixed header length
+- Exact IV length (16 bytes)
+- Exact HMAC length (32 bytes)
 
-**Protection against:**
-- Buffer attacks: Size checks prevent overflow
-- Truncated messages: Minimum size enforced
-- Oversized fields: Fixed sizes validated
+This blocks:
 
-## Summary of Security Guarantees
+- Truncated packets
+- Oversized fields
+- Structural attacks
 
-| Property | Mechanism | Strength |
-|----------|-----------|----------|
-| Confidentiality | AES-128-CBC + Random IV | 128-bit |
-| Integrity | HMAC-SHA256 | 256-bit |
-| Freshness | Round numbers | Strict monotonic |
-| Forward Secrecy | Key ratcheting | One-way hash |
-| Replay Prevention | Round + HMAC | Cryptographic |
-| Reorder Prevention | FSM + Round | State-based |
-| Reflection Prevention | Direction field | Protocol-level |
-| Padding Oracle | Encrypt-then-MAC | No oracle |
-| Desync Resistance | Immediate termination | Fail-secure |
+---
 
-## Threat Model Coverage
+## What This Protocol Guarantees
 
-**Active Adversary Capabilities:**
-- ✓ Replay messages: Detected by round numbers
-- ✓ Modify ciphertexts: Detected by HMAC
-- ✓ Drop packets: Causes desync → termination
-- ✓ Reorder messages: Detected by round numbers
-- ✓ Reflect messages: Detected by direction field
-- ✓ Inject messages: Cannot forge valid HMAC
-- ✓ Analyze traffic: Encryption provides confidentiality
+| Property              | How It’s Achieved                  |
+|-----------------------|------------------------------------|
+| Confidentiality       | AES-128-CBC + random IV            |
+| Integrity             | HMAC-SHA256                        |
+| Freshness             | Strict round numbers               |
+| Replay resistance     | Round + HMAC                       |
+| Ordering              | Round + FSM                        |
+| Reflection resistance | Direction field                    |
+| Forward secrecy       | Key ratcheting                     |
+| Oracle resistance     | Authenticate-before-decrypt        |
+| Fail-safe behavior    | Terminate on any anomaly           |
 
-**Limitations (by design):**
-- Cannot prevent DoS (adversary controls network)
-- No recovery from desynchronization (fail-secure design)
-- Requires pre-shared keys (no PKI available)
+---
 
-## Conclusion
+## What an Attacker *Can* and *Cannot* Do
 
-The protocol achieves strong security properties using only symmetric cryptography by combining:
-- Stateful design with strict validation
-- Defense-in-depth (multiple validation layers)
-- Fail-secure philosophy (terminate on any doubt)
-- Key evolution for forward secrecy
-- Authenticated encryption with proper ordering
+An active attacker may:
 
-All attacks in the threat model are effectively mitigated through the combined use of cryptographic primitives and protocol-level mechanisms.
+- Drop packets
+- Replay traffic
+- Reorder messages
+- Modify bytes
+- Inject garbage
+
+But the protocol ensures:
+
+- Replays are rejected
+- Modifications are detected
+- Reordering fails
+- Forgery is impossible
+- Dropping packets only causes termination, not compromise
+
+The only thing it cannot prevent is denial of service—because the network itself is hostile.
+
+---
+
+## Final Takeaway
+
+This protocol achieves strong security using only symmetric cryptography by combining:
+
+- Strict state tracking  
+- Defense in depth  
+- Authenticated encryption  
+- Fail-secure design  
+- One-way key evolution  
+
+Every message is either *valid and safe* or *rejected and terminal*. There is no gray area—and that is exactly what makes it robust in an adversarial network.
